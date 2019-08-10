@@ -29,24 +29,24 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public final class SecondarySampling {
+public final class SecondaryConditionalSampling {
 
-  public static SecondarySampling create() {
-    return new SecondarySampling();
+  public static SecondaryConditionalSampling create() {
+    return new SecondaryConditionalSampling();
   }
 
   Propagation.Factory propagationFactory = B3SinglePropagation.FACTORY;
   final Map<String, brave.handler.FinishedSpanHandler> systemToHandlers = new ConcurrentHashMap<>();
 
-  SecondarySampling() {
+  SecondaryConditionalSampling() {
   }
 
-  public SecondarySampling putSystem(String system, brave.handler.FinishedSpanHandler handler) {
+  public SecondaryConditionalSampling putSystem(String system, brave.handler.FinishedSpanHandler handler) {
     systemToHandlers.put(system, handler);
     return this;
   }
 
-  public SecondarySampling removeSystem(String system) {
+  public SecondaryConditionalSampling removeSystem(String system) {
     systemToHandlers.remove(system);
     return this;
   }

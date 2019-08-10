@@ -15,7 +15,9 @@ package brave.propagation;
 
 import brave.Tracing;
 import brave.internal.PropagationFields;
+import brave.propagation.ExtraFieldPropagation.Customizer;
 import brave.propagation.ExtraFieldPropagation.Extra;
+import brave.propagation.ExtraFieldPropagation.FieldCustomizer;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -326,6 +328,42 @@ public class ExtraFieldPropagationTest {
       .isEqualTo("bob");
     assertThat(ExtraFieldPropagation.get(context, "sessionid"))
       .isEqualTo("12345");
+  }
+
+  /** Example that sets local sampled when in an experiment. */
+  final static class LocalSampleCustomizer extends Customizer {
+    static final String FIELD_NAME = "experiment";
+
+    @Override
+    public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
+      return (fieldName, value) -> {
+        if (fieldName.equals(FIELD_NAME)) builder.sampledLocal();
+        return value;
+      };
+    }
+  }
+
+  /** Redaction only applies outbound. Inbound parsing should be unaffected */
+  @Test public void extract_redactedFieldAndCustomizer() {
+    factory = ExtraFieldPropagation.newFactoryBuilder(B3Propagation.FACTORY)
+      .addCustomizer(new LocalSampleCustomizer())
+      .addRedactedField("userid")
+      .addField(LocalSampleCustomizer.FIELD_NAME)
+      .build();
+    initialize();
+
+    injector.inject(context.toBuilder().sampled(false).build(), carrier);
+    carrier.put("userid", "bob");
+    carrier.put(LocalSampleCustomizer.FIELD_NAME, "playback");
+
+    context = extractor.extract(carrier).context();
+
+    assertThat(ExtraFieldPropagation.get(context, "userid"))
+      .isEqualTo("bob");
+    assertThat(ExtraFieldPropagation.get(context, LocalSampleCustomizer.FIELD_NAME))
+      .isEqualTo("playback");
+    assertThat(context.sampled()).isFalse();
+    assertThat(context.sampledLocal()).isTrue();
   }
 
   /** Redaction prevents named fields from being written downstream. */
