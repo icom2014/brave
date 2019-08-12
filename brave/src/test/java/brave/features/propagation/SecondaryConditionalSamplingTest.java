@@ -71,14 +71,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * small subset of the architecture starting at an arbitrary place. As such, triage is more advanced
  * that the other two systems.
  *
- * <h2>Trace data forwarder</h2>
+ * <h2>Trace forwarder</h2>
  * Each of the three systems have different capacities, retention rates and potentially different
  * billing implications. There should be no interference between these systems. For example, if
  * Zipkin is sampling 1% and while Triage is also on, still only the 1% sampled by B3 should be in
  * Zipkin. On the other hand, if Triage is off, it should not accidentally get 100% data from Edge.
  *
  * <p>The responsibility for this is a zipkin-compatible endpoint, which can route the same data to
- * one or more systems who want it. We'll call this the trace data forwarder. Some examples are
+ * one or more systems who want it. We'll call this the trace forwarder. Some examples are
  * [PitchFork](https://github.com/jeqo/zipkin-forwarder) and [Zipkin
  * Forwarder](https://github.com/jeqo/zipkin-forwarder). As trace data is completely out-of-band,
  * any inputs to help decide where to route the data must be in the Zipkin json. For example, if the
@@ -92,27 +92,36 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and reporting means we are not burdening the application with redundant overhead. It also means
  * we are not requiring engineering effort to re-instrument each time we add a system.
  *
- * TODO: continue re-writing below about the addition of edge into this sample.
- *
  * <h2>Implementing a sampling overlay in Brave</h2>
  * Brave assumes there is a primary, propagated sampling decision, captured in process as {@link
  * TraceContext#sampled()} at the beginning of the trace, and propagated downstream in B3 headers.
- * This simplifies the question of what to do about Triage, who can make a decision anywhere.
+ * This simplifies the question of what to do about Edge who make a constant decision, and Triage,
+ * who make a conditional decision anywhere. Since they are not the primary deciders of the trace,
+ * they cannot affect {@link TraceContext#sampled()}.
  *
- * <p>Since Triage cannot use the primary sampling state used by B3, it can only use a
- * secondary (extra field). When Triage decides to record data, it must set {@link
- * TraceContext#sampledLocal()} so that this decision can override any unsampled decision in B3,
- * while not interfering with it. Finally, by setting {@link Tracing.Builder#alwaysReportSpans()},
- * data selected by Triage will report to the same span reporter as normal Zipkin.
+ * <p>This implies Edge and Triage use secondary, extra fields, to propagate state about their
+ * respective decisions. When Edge or Triage decides to record data, they must set {@link
+ * TraceContext#sampledLocal()} so that recording occurs even if the primary decision is unsampled.
+ * At startup, {@link Tracing.Builder#alwaysReportSpans()} ensures the trace forwarder gets data
+ * regardless of the B3 decision.
+ *
+ * <p>Secondary fields and state management about them is the responsibility of {@link
+ * ExtraFieldPropagation}. Here, you can add an extra field that corresponds to a header sent out of
+ * process. You can also add a {@link ExtraFieldPropagation.Customizer} to ensure a relevant tag
+ * gets to the trace forwarder.
+ *
+ * TODO: think more.. I think the Customizer should be self-contained which would allow it to define
+ * the fields it needs also. probably this hints at a name Plugin. Basically, this will allow the
+ * state management code from edge and triage to be in different files.
  *
  * <p>Here's a simplified example of extra field handling from a sampling point of view:
  * <pre>{@code
- * class CustomerSupportSampler extends ExtraFieldPropagation.Customizer {
+ * class TriageSampler extends ExtraFieldPropagation.Customizer {
  *   @Override
  *   public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
  *     return (fieldName, value) -> {
  *       // look at the extra field to see if it means we should boost the signal
- *       if (fieldName.equals("triage") && customerSupportWants(value)) {
+ *       if (fieldName.equals("triage") && triageWants(value)) {
  *         builder.sampledLocal();
  *       }
  *       return value;
@@ -153,8 +162,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   // flooding Zipkin when B3 says no.
  *   @Override public boolean handle(TraceContext context, MutableSpan span) {
  *     boolean b3Sampled = Boolean.TRUE.equals(context.sampled()); // primary remote sampling
- *     boolean customerSupportSampled = context.sampledLocal(); // secondary overlay
- *     span.tag("sampled", b3Sampled && customerSupportSampled ? "zipkin,triage"
+ *     boolean triageSampled = context.sampledLocal(); // secondary overlay
+ *     span.tag("sampled", b3Sampled && triageSampled ? "zipkin,triage"
  *       : b3Sampled ? "b3" : "triage");
  *     return true;
  *   }
