@@ -74,9 +74,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <h2>Trace data forwarder</h2>
  * Each of the three systems have different capacities, retention rates and potentially different
  * billing implications. There should be no interference between these systems. For example, if
- * Zipkin is sampling 1% and Triage is sampling 5% of a part of the network, still only the 1%
- * sampled by B3 should be in Zipkin. On the other hand, if Triage overlaps with edge, it should not
- * accidentally get 100% data.
+ * Zipkin is sampling 1% and while Triage is also on, still only the 1% sampled by B3 should be in
+ * Zipkin. On the other hand, if Triage is off, it should not accidentally get 100% data from Edge.
  *
  * <p>The responsibility for this is a zipkin-compatible endpoint, which can route the same data to
  * one or more systems who want it. We'll call this the trace data forwarder. Some examples are
