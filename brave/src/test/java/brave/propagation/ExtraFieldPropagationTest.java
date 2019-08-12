@@ -15,9 +15,9 @@ package brave.propagation;
 
 import brave.Tracing;
 import brave.internal.PropagationFields;
-import brave.propagation.ExtraFieldPropagation.Customizer;
 import brave.propagation.ExtraFieldPropagation.Extra;
-import brave.propagation.ExtraFieldPropagation.FieldCustomizer;
+import brave.propagation.ExtraFieldPropagation.FieldUpdater;
+import brave.propagation.ExtraFieldPropagation.Plugin;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -331,36 +331,41 @@ public class ExtraFieldPropagationTest {
   }
 
   /** Example that sets local sampled when in an experiment. */
-  final static class LocalSampleCustomizer extends Customizer {
+  final static class AlsoSampleExperiments extends Plugin {
     static final String FIELD_NAME = "experiment";
 
-    @Override
-    public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
+    AlsoSampleExperiments() {
+      super(Collections.singleton(FIELD_NAME));
+    }
+
+    @Override public FieldUpdater extractFieldUpdater(TraceContextOrSamplingFlags.Builder builder) {
       return (fieldName, value) -> {
-        if (fieldName.equals(FIELD_NAME)) builder.sampledLocal();
+        if (fieldName.equals(FIELD_NAME)) {
+          builder.sampledLocal(); // Irrespective of the value of the field, we want data collected
+        }
         return value;
       };
     }
   }
 
   /** Redaction only applies outbound. Inbound parsing should be unaffected */
-  @Test public void extract_redactedFieldAndCustomizer() {
+  @Test public void extract_redactedFieldAndPlugin() {
     factory = ExtraFieldPropagation.newFactoryBuilder(B3Propagation.FACTORY)
-      .addCustomizer(new LocalSampleCustomizer())
+      .addPlugin(new AlsoSampleExperiments())
       .addRedactedField("userid")
-      .addField(LocalSampleCustomizer.FIELD_NAME)
+      .addField(AlsoSampleExperiments.FIELD_NAME)
       .build();
     initialize();
 
     injector.inject(context.toBuilder().sampled(false).build(), carrier);
     carrier.put("userid", "bob");
-    carrier.put(LocalSampleCustomizer.FIELD_NAME, "playback");
+    carrier.put(AlsoSampleExperiments.FIELD_NAME, "playback");
 
     context = extractor.extract(carrier).context();
 
     assertThat(ExtraFieldPropagation.get(context, "userid"))
       .isEqualTo("bob");
-    assertThat(ExtraFieldPropagation.get(context, LocalSampleCustomizer.FIELD_NAME))
+    assertThat(ExtraFieldPropagation.get(context, AlsoSampleExperiments.FIELD_NAME))
       .isEqualTo("playback");
     assertThat(context.sampled()).isFalse();
     assertThat(context.sampledLocal()).isTrue();

@@ -340,7 +340,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #alwaysReportSpans()
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addCustomizer(ExtraFieldPropagation.Customizer)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPropagation.Plugin)
      */
     public Builder addFinishedSpanHandler(FinishedSpanHandler finishedSpanHandler) {
       if (finishedSpanHandler == null) {
@@ -370,7 +370,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #addFinishedSpanHandler(FinishedSpanHandler)
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addCustomizer(ExtraFieldPropagation.Customizer)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPropagation.Plugin)
      */
     public Builder alwaysReportSpans() {
       this.alwaysReportSpans = true;

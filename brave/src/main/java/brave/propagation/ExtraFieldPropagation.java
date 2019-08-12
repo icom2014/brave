@@ -14,6 +14,7 @@
 package brave.propagation;
 
 import brave.Tracing;
+import brave.handler.MutableSpan;
 import brave.internal.Nullable;
 import brave.internal.PredefinedPropagationFields;
 import brave.internal.PropagationFields;
@@ -97,60 +98,74 @@ import java.util.Set;
  * }</pre>
  */
 public final class ExtraFieldPropagation<K> implements Propagation<K> {
-  static final FieldCustomizer NOOP_FIELD_CUSTOMIZER = new FieldCustomizer() {
-    @Override public String onField(String key, String value) {
-      return value;
-    }
-  };
-  static final Customizer[] NO_CONTEXT_CUSTOMIZERS = new Customizer[0];
-  static final FieldCustomizer[] NO_FIELD_CUSTOMIZERS = new FieldCustomizer[0];
+  static final Plugin[] NO_CONTEXT_CUSTOMIZERS = new Plugin[0];
+  static final FieldUpdater[] NO_FIELD_UPDATERS = new FieldUpdater[0];
 
   /**
    * This allows you to manipulate fields, including dropping or initializing values. This object
    * will be called for each field added to {@link FactoryBuilder}, in the same order they were,
    * added and regardless of whether the field is present or not.
+   *
+   * <p>Design note: This is the exact same signature as {@link MutableSpan.TagUpdater}.
    */
-  public interface FieldCustomizer {
+  public interface FieldUpdater {
+    FieldUpdater NOOP = new FieldUpdater() {
+      @Override public String update(String key, String value) {
+        return value;
+      }
+
+      @Override public String toString() {
+        return "NoopFieldUpdater{}";
+      }
+    };
+
     /**
-     * Returns the same value, an updated one, or null to drop the field.
+     * Returns the same value, an updated one, or null to drop the field. For example, this could
+     * append to an existing string.
      *
      * @see ExtraFieldPropagation#set(String, String)
      */
-    @Nullable String onField(String fieldName, @Nullable String value);
+    @Nullable String update(String name, @Nullable String value);
   }
 
   /**
    * Methods here are called once per extract or inject, which allows the returned customizer to
    * handle multiple fields as needed.
    */
-  public static abstract class Customizer {
-    public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
-      return NOOP_FIELD_CUSTOMIZER;
+  public static abstract class Plugin {
+    // declaring field names here means plugins do not need to collaborate with the builder
+    protected final Set<String> fieldNames;
+
+    protected Plugin(Collection<String> fieldNames) {
+      Set<String> copy = new LinkedHashSet<>(Arrays.asList(ensureLowerCase(fieldNames)));
+      this.fieldNames = Collections.unmodifiableSet(copy);
     }
 
-    public FieldCustomizer injectCustomizer(TraceContext context) {
-      return NOOP_FIELD_CUSTOMIZER;
-    }
-  }
-
-  static final class RedactOnInject extends Customizer implements FieldCustomizer {
-    final LinkedHashSet<String> redactedFields;
-
-    RedactOnInject(LinkedHashSet<String> redactedFields) {
-      this.redactedFields = redactedFields;
+    protected FieldUpdater extractFieldUpdater(TraceContextOrSamplingFlags.Builder builder) {
+      return FieldUpdater.NOOP;
     }
 
-    @Override public FieldCustomizer injectCustomizer(TraceContext context) {
-      return this;
-    }
-
-    @Override public String onField(String fieldName, String value) {
-      if (redactedFields.contains(fieldName)) return null;
-      return value;
+    protected FieldUpdater injectFieldUpdater(TraceContext context) {
+      return FieldUpdater.NOOP;
     }
 
     @Override public String toString() {
-      return "RedactOnInject{" + redactedFields + "}";
+      return getClass().getSimpleName() + "{" + fieldNames + "}";
+    }
+  }
+
+  static final class RedactOnInject extends Plugin implements FieldUpdater {
+    RedactOnInject(Collection<String> fieldNames) {
+      super(fieldNames);
+    }
+
+    @Override protected FieldUpdater injectFieldUpdater(TraceContext context) {
+      return this;
+    }
+
+    @Override public String update(String fieldName, String value) {
+      if (fieldNames.contains(fieldName)) return null; // redact by deletion
+      return value;
     }
   }
 
@@ -158,7 +173,7 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
   public static Factory newFactory(Propagation.Factory delegate, String... fieldNames) {
     if (delegate == null) throw new NullPointerException("delegate == null");
     if (fieldNames == null) throw new NullPointerException("fieldNames == null");
-    String[] validated = ensureLowerCase(new LinkedHashSet<>(Arrays.asList(fieldNames)));
+    String[] validated = ensureLowerCase(Arrays.asList(fieldNames));
     return new Factory(delegate, validated, validated);
   }
 
@@ -166,8 +181,7 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
   public static Factory newFactory(Propagation.Factory delegate,
     Collection<String> fieldNames) {
     if (delegate == null) throw new NullPointerException("delegate == null");
-    if (fieldNames == null) throw new NullPointerException("fieldNames == null");
-    String[] validated = ensureLowerCase(new LinkedHashSet<>(fieldNames));
+    String[] validated = ensureLowerCase(fieldNames);
     return new Factory(delegate, validated, validated);
   }
 
@@ -180,7 +194,7 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     final Set<String> fieldNames = new LinkedHashSet<>();
     final Set<String> redactedFieldNames = new LinkedHashSet<>();
     final Map<String, String[]> prefixedNames = new LinkedHashMap<>();
-    final ArrayList<Customizer> customizers = new ArrayList<>();
+    final ArrayList<Plugin> plugins = new ArrayList<>();
 
     FactoryBuilder(Propagation.Factory delegate) {
       if (delegate == null) throw new NullPointerException("delegate == null");
@@ -197,16 +211,15 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
      * @see TraceContext#sampledLocal()
      * @see Tracing.Builder#alwaysReportSpans()
      */
-    public FactoryBuilder addCustomizer(Customizer customizer) {
-      if (customizer == null) throw new NullPointerException("customizer == null");
-      this.customizers.add(customizer);
+    public FactoryBuilder addPlugin(Plugin plugin) {
+      if (plugin == null) throw new NullPointerException("plugin == null");
+      this.plugins.add(plugin);
+      this.fieldNames.addAll(plugin.fieldNames);
       return this;
     }
 
     /** Same as {@link #addField} except that this field is redacted from downstream propagation. */
     public FactoryBuilder addRedactedField(String fieldName) {
-      fieldName = validateFieldName(fieldName);
-      fieldNames.add(fieldName);
       redactedFieldNames.add(fieldName);
       return this;
     }
@@ -231,18 +244,24 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     public FactoryBuilder addPrefixedFields(String prefix, Collection<String> fieldNames) {
       if (prefix == null) throw new NullPointerException("prefix == null");
       if (prefix.isEmpty()) throw new IllegalArgumentException("prefix is empty");
-      if (fieldNames == null) throw new NullPointerException("fieldNames == null");
-      prefixedNames.put(prefix, ensureLowerCase(new LinkedHashSet<>(fieldNames)));
+      prefixedNames.put(prefix, ensureLowerCase(fieldNames));
       return this;
     }
 
     public Factory build() {
+      Plugin[] pluginsCopy = arrayOfPlugins(redactedFieldNames, plugins);
+
+      Set<String> distinctFields = new LinkedHashSet<>(fieldNames);
+      for (Plugin plugin : pluginsCopy) {
+        distinctFields.addAll(plugin.fieldNames);
+      }
+
       List<String> fields = new ArrayList<>(), keys = new ArrayList<>();
       List<Integer> keyToFieldList = new ArrayList<>();
 
       // First pass: add any field names that are used as propagation keys directly
       int i = 0;
-      for (String fieldName : fieldNames) {
+      for (String fieldName : distinctFields) {
         fields.add(fieldName);
         keys.add(fieldName);
         keyToFieldList.add(i++);
@@ -271,18 +290,8 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
         keyToField[i] = keyToFieldList.get(i);
       }
 
-      Customizer[] customizersCopy;
-      if (redactedFieldNames.isEmpty()) {
-        customizersCopy = customizers.toArray(new Customizer[0]);
-      } else {
-        customizersCopy = new Customizer[customizers.size() + 1];
-        for (i = 0; i < customizers.size(); i++) {
-          customizersCopy[i] = customizers.get(i);
-        }
-        customizersCopy[i] = new RedactOnInject(new LinkedHashSet<>(redactedFieldNames));
-      }
       return new Factory(delegate, fields.toArray(new String[0]), keys.toArray(new String[0]),
-        keyToField, customizersCopy);
+        keyToField, pluginsCopy);
     }
   }
 
@@ -360,7 +369,7 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     final String[] keyNames;
     final int[] keyToField;
     final ExtraFactory extraFactory;
-    final Customizer[] customizers;
+    final Plugin[] plugins;
 
     Factory(Propagation.Factory delegate, String[] fieldNames, String[] keyNames) {
       this(delegate, fieldNames, keyNames, keyToField(keyNames), NO_CONTEXT_CUSTOMIZERS);
@@ -377,13 +386,13 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     }
 
     Factory(Propagation.Factory delegate, String[] fieldNames, String[] keyNames,
-      int[] keyToField, Customizer[] customizers) {
+      int[] keyToField, Plugin[] plugins) {
       this.delegate = delegate;
       this.keyToField = keyToField;
       this.fieldNames = fieldNames;
       this.keyNames = keyNames;
       this.extraFactory = new ExtraFactory(fieldNames);
-      this.customizers = customizers;
+      this.plugins = plugins;
     }
 
     @Override public boolean supportsJoin() {
@@ -464,16 +473,16 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
       delegate.inject(ctx, carrier);
       Extra extra = ctx.findExtra(Extra.class);
       if (extra == null) return;
-      inject(extra, carrier, injectCustomizers(propagation.factory.customizers, ctx));
+      inject(extra, carrier, injectFieldUpdaters(propagation.factory.plugins, ctx));
     }
 
-    void inject(Extra fields, C carrier, FieldCustomizer[] fieldCustomizers) {
+    void inject(Extra fields, C carrier, FieldUpdater[] fieldUpdaters) {
       for (int i = 0, length = propagation.keys.length; i < length; i++) {
         int j = propagation.factory.keyToField[i];
         String fieldName = propagation.factory.fieldNames[j];
         String maybeValue = fields.get(j);
-        for (FieldCustomizer fieldCustomizer : fieldCustomizers) {
-          maybeValue = fieldCustomizer.onField(fieldName, maybeValue);
+        for (FieldUpdater fieldUpdater : fieldUpdaters) {
+          maybeValue = fieldUpdater.update(fieldName, maybeValue);
         }
         if (maybeValue != null) setter.put(carrier, propagation.keys[i], maybeValue);
       }
@@ -493,16 +502,16 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
 
     @Override public TraceContextOrSamplingFlags extract(C carrier) {
       TraceContextOrSamplingFlags.Builder builder = delegate.extract(carrier).toBuilder();
-      FieldCustomizer[] fieldCustomizers =
-        extractCustomizers(propagation.factory.customizers, builder);
+      FieldUpdater[] fieldUpdaters =
+        extractCustomizers(propagation.factory.plugins, builder);
       // always allocate in case fields are added late
       Extra fields = propagation.factory.extraFactory.create();
       for (int i = 0, length = propagation.keys.length; i < length; i++) {
         int j = propagation.factory.keyToField[i];
         String fieldName = propagation.factory.fieldNames[j];
         String maybeValue = getter.get(carrier, propagation.keys[i]);
-        for (FieldCustomizer fieldCustomizer : fieldCustomizers) {
-          maybeValue = fieldCustomizer.onField(fieldName, maybeValue);
+        for (FieldUpdater fieldUpdater : fieldUpdaters) {
+          maybeValue = fieldUpdater.update(fieldName, maybeValue);
         }
         if (maybeValue != null) fields.put(j, maybeValue);
       }
@@ -510,15 +519,16 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     }
   }
 
-  static String[] ensureLowerCase(Collection<String> names) {
-    if (names.isEmpty()) throw new IllegalArgumentException("names is empty");
-    Iterator<String> nextName = names.iterator();
-    String[] result = new String[names.size()];
+  static String[] ensureLowerCase(Collection<String> fieldNames) {
+    if (fieldNames == null) throw new NullPointerException("fieldNames == null");
+    if (fieldNames.isEmpty()) throw new IllegalArgumentException("fieldNames is empty");
+    Iterator<String> nextName = new LinkedHashSet<>(fieldNames).iterator(); // dedupe
+    String[] result = new String[fieldNames.size()];
     for (int i = 0; nextName.hasNext(); i++) {
       String name = nextName.next();
-      if (name == null) throw new NullPointerException("names[" + i + "] == null");
+      if (name == null) throw new NullPointerException("fieldNames[" + i + "] == null");
       name = name.trim();
-      if (name.isEmpty()) throw new IllegalArgumentException("names[" + i + "] is empty");
+      if (name.isEmpty()) throw new IllegalArgumentException("fieldNames[" + i + "] is empty");
       result[i] = name.toLowerCase(Locale.ROOT);
     }
     return result;
@@ -570,24 +580,41 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     return fieldName;
   }
 
-  static FieldCustomizer[] extractCustomizers(Customizer[] customizers,
-    TraceContextOrSamplingFlags.Builder builder) {
-    int customizerLength = customizers.length;
-    if (customizerLength == 0) return NO_FIELD_CUSTOMIZERS;
-    FieldCustomizer[] fieldCustomizers = new FieldCustomizer[customizerLength];
-    for (int i = 0; i < customizerLength; i++) {
-      fieldCustomizers[i] = customizers[i].extractCustomizer(builder);
+  /** Previously, redacted field names was implemented directly, instead of as a plugin. */
+  static Plugin[] arrayOfPlugins(Set<String> redactedFieldNames, List<Plugin> plugins) {
+    Plugin[] result;
+    if (redactedFieldNames.isEmpty()) {
+      result = plugins.toArray(new Plugin[0]);
+    } else {
+      result = new Plugin[plugins.size() + 1];
+      int i = 0;
+      for (; i < plugins.size(); i++) {
+        result[i] = plugins.get(i);
+      }
+      // Redaction can only be guaranteed when last
+      result[i] = new RedactOnInject(new LinkedHashSet<>(redactedFieldNames));
     }
-    return fieldCustomizers;
+    return result;
   }
 
-  static FieldCustomizer[] injectCustomizers(Customizer[] customizers, TraceContext ctx) {
-    int customizerLength = customizers.length;
-    if (customizerLength == 0) return NO_FIELD_CUSTOMIZERS;
-    FieldCustomizer[] fieldCustomizers = new FieldCustomizer[customizerLength];
+  static FieldUpdater[] extractCustomizers(Plugin[] plugins,
+    TraceContextOrSamplingFlags.Builder builder) {
+    int customizerLength = plugins.length;
+    if (customizerLength == 0) return NO_FIELD_UPDATERS;
+    FieldUpdater[] fieldUpdaters = new FieldUpdater[customizerLength];
     for (int i = 0; i < customizerLength; i++) {
-      fieldCustomizers[i] = customizers[i].injectCustomizer(ctx);
+      fieldUpdaters[i] = plugins[i].extractFieldUpdater(builder);
     }
-    return fieldCustomizers;
+    return fieldUpdaters;
+  }
+
+  static FieldUpdater[] injectFieldUpdaters(Plugin[] plugins, TraceContext ctx) {
+    int customizerLength = plugins.length;
+    if (customizerLength == 0) return NO_FIELD_UPDATERS;
+    FieldUpdater[] fieldUpdaters = new FieldUpdater[customizerLength];
+    for (int i = 0; i < customizerLength; i++) {
+      fieldUpdaters[i] = plugins[i].injectFieldUpdater(ctx);
+    }
+    return fieldUpdaters;
   }
 }

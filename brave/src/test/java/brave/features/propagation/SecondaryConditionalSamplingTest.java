@@ -107,18 +107,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Secondary fields and state management about them is the responsibility of {@link
  * ExtraFieldPropagation}. Here, you can add an extra field that corresponds to a header sent out of
- * process. You can also add a {@link ExtraFieldPropagation.Customizer} to ensure a relevant tag
- * gets to the trace forwarder.
+ * process. You can also add a {@link ExtraFieldPropagation.Plugin} to ensure a relevant tag gets to
+ * the trace forwarder.
  *
- * TODO: think more.. I think the Customizer should be self-contained which would allow it to define
- * the fields it needs also. probably this hints at a name Plugin. Basically, this will allow the
- * state management code from edge and triage to be in different files.
+ * TODO: continue to update
  *
  * <p>Here's a simplified example of extra field handling from a sampling point of view:
  * <pre>{@code
- * class TriageSampler extends ExtraFieldPropagation.Customizer {
+ * class TriageSampler extends ExtraFieldPropagation.Plugin {
  *   @Override
- *   public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
+ *   public FieldUpdater extractFieldUpdater(TraceContextOrSamplingFlags.Builder builder) {
  *     return (fieldName, value) -> {
  *       // look at the extra field to see if it means we should boost the signal
  *       if (fieldName.equals("triage") && triageWants(value)) {
@@ -172,7 +170,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>Summary</h2>
  * It is relatively easy to report more data based on a secondary decision made based on an extra
- * field. All you need to do is implement and configure {@link ExtraFieldPropagation.Customizer} to
+ * field. All you need to do is implement and configure {@link ExtraFieldPropagation.Plugin} to
  * {@link TraceContext#sampledLocal() sample local} based on the field value, and set the tracing
  * instance to {@link Tracing.Builder#alwaysReportSpans() always report spans}. If the spans already
  * contain data the backend needs to route to appropriate data stores, you are done. If it needs a
