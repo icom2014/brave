@@ -38,43 +38,73 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * This proves a concept needed for sites who have different tracing systems behind one Zipkin
- * compatible endpoint. At a high level, normal sampled Zipkin coexists with a customer support
- * system which needs 100% data for a subset of the network, based on request properties like a user
- * ID. Our goal to allow this coexistence without redundant overhead or reporting queues and without
- * sending incomplete data to Zipkin.
+ * compatible endpoint. At a high level, normal probabilistic B3 sampling co-exists with Edge
+ * sampling (100% between the gateway and the first service behind it), and Triage sampling (100%
+ * conditional on request properties like a user ID). Our goal to allow this coexistence without
+ * redundant overhead or reporting queues and without sending irrelevant data to any of the
+ * systems.
  *
- * <h2>Normal Zipkin vs Customer Support</h2>
- * <p>The support system in this example allows employees to conditionally get 100% data from a
- * limited area of the network, without flooding the normal Zipkin service, and without accidentally
- * sending partial data to the normal Zipkin service either. Regardless of whether customer service
- * asks for 100%, normal probabilistic (B3) sampling will occur. To review, Zipkin typically chooses
- * to keep a trace or not, and retains that same decision across the whole request (via B3 headers).
- * The customer service system not only uses different headers, but it triggers only at certain
- * nodes, and only on requests relevant to the customer support problem (ex same customer ID).
+ * <h2>Zipkin vs Edge vs Triage</h2>
+ * In this example, there are three tracing systems: zipkin, edge and triage. The following points
+ * describe elaborate both what they need and what they don't need.
  *
- * <p>While Zipkin and Customer Support choose data differently, and use different backends, they
- * both share the same instrumentation and report data to the same Zipkin-compatible endpoint. This
- * assumes the endpoint is able to route data to Zipkin or Customer Support or both based on what it
- * sees in the Zipkin v2 json payloads. For example, if it sees a tag relating to customer support,
- * it knows to route the data there.
+ * <h3>Zipkin</h3>
+ * Zipkin is always on for the entire network, and if tracing occurs, it wants the entire trace from
+ * the first request to the last on every node in the network. Zipkin is the primary owner of the
+ * trace, and its state is in B3 headers, including the up-front decision on whether or not to
+ * record data on this request. To review, [B3 propagates](https://github.com/openzipkin/b3-propagation)
+ * through the process and across nodes, and the a sampling decision is trace-scoped: it never
+ * changes from true to false or visa versa.c
  *
- * <p>It is critical that these tools in no way change the api surface to instrumentation libraries
+ * <h3>Edge</h3>
+ * Edge tracing is traffic that starts at gateway of the architecture. Unlike Zipkin sampling, this
+ * is 100% with the only condition being TTL, a simple TTL of one hop-down. 100% trace data only
+ * including ingress and egress from the edge router can serve a lot of value as the teams can build
+ * reliable statistics and flow charts. It is easy to implement as it is relatively stateless. For
+ * example, the router always collects and the first node needs only to consume the instruction and
+ * expire the sampling decision given to them. (not propagate it further).
+ *
+ * <h3>Triage</h3>
+ * The triage system serves customer support goals. Like Edge, this is 100% data, but unlike Edge,
+ * where data is collected is conditional on request properties such as the customer ID and the
+ * services under investigation. In other words, the triage system is on-demand, and could cover a
+ * small subset of the architecture starting at an arbitrary place. As such, triage is more advanced
+ * that the other two systems.
+ *
+ * <h2>Trace data forwarder</h2>
+ * Each of the three systems have different capacities, retention rates and potentially different
+ * billing implications. There should be no interference between these systems. For example, if
+ * Zipkin is sampling 1% and Triage is sampling 5% of a part of the network, still only the 1%
+ * sampled by B3 should be in Zipkin. On the other hand, if Triage overlaps with edge, it should not
+ * accidentally get 100% data.
+ *
+ * <p>The responsibility for this is a zipkin-compatible endpoint, which can route the same data to
+ * one or more systems who want it. We'll call this the trace data forwarder. Some examples are
+ * [PitchFork](https://github.com/jeqo/zipkin-forwarder) and [Zipkin
+ * Forwarder](https://github.com/jeqo/zipkin-forwarder). As trace data is completely out-of-band,
+ * any inputs to help decide where to route the data must be in the Zipkin json. For example, if the
+ * forwarder sees a tag relating to triage, it can build a forwarding rule based on this.
+ *
+ * <h2>The application is unaware of the other tracing systems</h2>
+ * It is critical that these tools in no way change the api surface to instrumentation libraries
  * such as what's used by frameworks like Spring Boot. The fact that there are multiple systems
- * choosing data differently should not be noticeable by instrumentation, nor should it double
- * overhead or otherwise. Any re-instrumentation or double-overhead burden would burden engineers,
- * and represent an abstraction break.
+ * choosing data differently should not be noticeable by instrumentation. All of these systems use
+ * the same trace and span IDs, which means log correlation is not affected. Sharing instrumentation
+ * and reporting means we are not burdening the application with redundant overhead. It also means
+ * we are not requiring engineering effort to re-instrument each time we add a system.
+ *
+ * TODO: continue re-writing below about the addition of edge into this sample.
  *
  * <h2>Implementing a sampling overlay in Brave</h2>
  * Brave assumes there is a primary, propagated sampling decision, captured in process as {@link
  * TraceContext#sampled()} at the beginning of the trace, and propagated downstream in B3 headers.
- * This simplifies the question of what to do about Customer Support, who can make a decision
- * anywhere.
+ * This simplifies the question of what to do about Triage, who can make a decision anywhere.
  *
- * <p>Since Customer Support cannot use the primary sampling state used by B3, it can only use a
- * secondary (extra field). When Customer Support decides to record data, it must set {@link
+ * <p>Since Triage cannot use the primary sampling state used by B3, it can only use a
+ * secondary (extra field). When Triage decides to record data, it must set {@link
  * TraceContext#sampledLocal()} so that this decision can override any unsampled decision in B3,
  * while not interfering with it. Finally, by setting {@link Tracing.Builder#alwaysReportSpans()},
- * data selected by Customer Support will report to the same span reporter as normal Zipkin.
+ * data selected by Triage will report to the same span reporter as normal Zipkin.
  *
  * <p>Here's a simplified example of extra field handling from a sampling point of view:
  * <pre>{@code
@@ -83,7 +113,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   public FieldCustomizer extractCustomizer(TraceContextOrSamplingFlags.Builder builder) {
  *     return (fieldName, value) -> {
  *       // look at the extra field to see if it means we should boost the signal
- *       if (fieldName.equals("customer-support") && customerSupportWants(value)) {
+ *       if (fieldName.equals("triage") && customerSupportWants(value)) {
  *         builder.sampledLocal();
  *       }
  *       return value;
@@ -98,35 +128,35 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link Tracing.Builder#spanReporter(Reporter) normal span reporter}. Most backends assume the
  * entire trace will be present and won't work well if it isn't.
  *
- * <p>If we solely use {@link Tracing.Builder#alwaysReportSpans()} to get Customer Support's data
- * to the Zipkin endpoint, we could cause a problem. Since Customer Support's data is incomplete, it
- * could produce confusing results in the normal Zipkin backend. Moreover, it could add load to the
+ * <p>If we solely use {@link Tracing.Builder#alwaysReportSpans()} to get Triage's data
+ * to the Zipkin endpoint, we could cause a problem. Since Triage's data is incomplete, it could
+ * produce confusing results in the normal Zipkin backend. Moreover, it could add load to the
  * generic Zipkin backend. Similarly, it would be a problem to send all B3 data to Customer
  * support.
  *
  * <p>To make this point concrete, any of the below scenarios will now result in reported spans:
  * <ul>
- *   <li>B3 yes, but Customer Support no</li>
- *   <li>B3 no, but Customer Support yes</li>
+ *   <li>B3 yes, but Triage no</li>
+ *   <li>B3 no, but Triage yes</li>
  *   <li>Both yes</li>
  * </ul>
  *
- * With only two systems involved (B3 and Customer Support), this problem can be cleared up
+ * With only two systems involved (B3 and Triage), this problem can be cleared up
  * unambiguously by looking at the flags {@link TraceContext#sampled()} (for B3) and
- * {@link TraceContext#sampledLocal()} (for customer Support). When a span is finished, we can add
+ * {@link TraceContext#sampledLocal()} (for triage). When a span is finished, we can add
  * a partioning tag to help the http collector decide if it should sent the data to either or both
  * backends.
  *
  * <p>Ex.
  * <pre>{@code
  * class AddSampledTag extends FinishedSpanHandler {
- *   // Propagate a data routing hint to the backend to ensure Customer Support doesn't end up
+ *   // Propagate a data routing hint to the backend to ensure Triage doesn't end up
  *   // flooding Zipkin when B3 says no.
  *   @Override public boolean handle(TraceContext context, MutableSpan span) {
  *     boolean b3Sampled = Boolean.TRUE.equals(context.sampled()); // primary remote sampling
  *     boolean customerSupportSampled = context.sampledLocal(); // secondary overlay
- *     span.tag("sampled", b3Sampled && customerSupportSampled ? "zipkin,customer-support"
- *       : b3Sampled ? "b3" : "customerSupport");
+ *     span.tag("sampled", b3Sampled && customerSupportSampled ? "zipkin,triage"
+ *       : b3Sampled ? "b3" : "triage");
  *     return true;
  *   }
  * }
