@@ -17,7 +17,7 @@ import brave.Span;
 import brave.Span.Kind;
 import brave.Tracer;
 import brave.Tracing;
-import brave.features.propagation.SecondaryConditionalSampling.Extra;
+import brave.features.propagation.SecondarySampling.Extra;
 import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
 import brave.propagation.ExtraFieldPropagation;
@@ -177,17 +177,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * hint, you can add a {@link FinishedSpanHandler} to add a tag which ensures the backend consistently
  * and statelessly honors the sampling intent.
  */
-public class SecondaryConditionalSamplingTest {
-  List<zipkin2.Span> zipkin = new ArrayList<>();
-  List<MutableSpan> edge = new ArrayList<>(), links = new ArrayList<>(), triage =
+public class SecondarySamplingTest {
+  List<zipkin2.Span> zipkin = new ArrayList<>(), edge = new ArrayList<>(), triage =
     new ArrayList<>();
-  FinishedSpanHandler triageHandler = new FinishedSpanHandler() {
-    @Override public boolean handle(TraceContext context, MutableSpan span) {
-      return triage.add(span);
-    }
+  Reporter<zipkin2.Span> traceForwarder = span -> {
+    String systems = span.tags().get("systems");
+    if (systems.contains("zipkin")) zipkin.add(span);
+    if (systems.contains("edge")) edge.add(span);
+    if (systems.contains("triage")) triage.add(span);
   };
 
-  SecondaryConditionalSampling secondaryConditionalSampling = SecondaryConditionalSampling.create()
+  SecondarySampling secondarySampling = SecondarySampling.create()
     .putSystem("edge", new FinishedSpanHandler() {
       @Override public boolean handle(TraceContext context, MutableSpan span) {
         return edge.add(span);
@@ -199,7 +199,7 @@ public class SecondaryConditionalSamplingTest {
       }
     });
   Tracing tracing =
-    secondaryConditionalSampling.build(Tracing.newBuilder().spanReporter(zipkin::add));
+    secondarySampling.build(Tracing.newBuilder().spanReporter(zipkin::add));
 
   TraceContext.Extractor<Map<String, String>> extractor = tracing.propagation().extractor(Map::get);
   TraceContext.Injector<Map<String, String>> injector = tracing.propagation().injector(Map::put);
@@ -218,40 +218,40 @@ public class SecondaryConditionalSamplingTest {
    */
   @Test public void integrationTest() {
     map.put("b3", "0");
-    map.put("sampling", "edge:tps=1,ttl=3;links:sampled=1;triage:tps=5");
+    map.put("sampling", "edge:ttl=3;links;triage");
 
     Tracer tracer = tracing.tracer();
     Span span1 = tracer.nextSpan(extractor.extract(map)).name("span1").kind(Kind.SERVER).start();
     Span span2 = tracer.newChild(span1.context()).kind(Kind.CLIENT).name("span2").start();
     injector.inject(span2.context(), map);
-    assertThat(map).containsEntry("sampling", "edge:ttl=3,sampled=1;links:sampled=1;triage:tps=5");
+    assertThat(map).containsEntry("sampling", "edge:ttl=3;links;triage");
 
     // hop 1
     Span span3 = tracer.nextSpan(extractor.extract(map)).kind(Kind.SERVER).start();
     Span span4 = tracer.newChild(span3.context()).kind(Kind.CLIENT).name("span3").start();
     injector.inject(span4.context(), map);
-    assertThat(map).containsEntry("sampling", "edge:sampled=1,ttl=2;links:sampled=1;triage:tps=5");
+    assertThat(map).containsEntry("sampling", "edge:ttl=2;links;triage");
 
     // hop 2
     Span span5 = tracer.nextSpan(extractor.extract(map)).kind(Kind.SERVER).start();
     Span span6 = tracer.newChild(span5.context()).kind(Kind.CLIENT).name("span4").start();
     injector.inject(span6.context(), map);
-    assertThat(map).containsEntry("sampling", "edge:sampled=1,ttl=1;links:sampled=1;triage:tps=5");
+    assertThat(map).containsEntry("sampling", "edge:ttl=1;links;triage");
 
     // hop 3
     Span span7 = tracer.nextSpan(extractor.extract(map)).kind(Kind.SERVER).start();
     Span span8 = tracer.newChild(span7.context()).kind(Kind.CLIENT).name("span5").start();
     injector.inject(span8.context(), map);
-    assertThat(map).containsEntry("sampling", "links:sampled=1;triage:tps=5");
+    assertThat(map).containsEntry("sampling", "links;triage");
 
     // dynamic configuration adds triage processing
-    secondaryConditionalSampling.putSystem("triage", triageHandler);
+    secondarySampling.putSystem("triage", triageHandler);
 
     // hop 4, triage is now sampled
     Span span9 = tracer.nextSpan(extractor.extract(map)).kind(Kind.SERVER).start();
     Span span10 = tracer.newChild(span9.context()).kind(Kind.CLIENT).name("span6").start();
     injector.inject(span10.context(), map);
-    assertThat(map).containsEntry("sampling", "links:sampled=1;triage:sampled=1");
+    assertThat(map).containsEntry("sampling", "links;triage");
 
     asList(span1, span2, span3, span4, span5, span6, span7, span8, span9, span10)
       .forEach(Span::finish);
@@ -264,17 +264,17 @@ public class SecondaryConditionalSamplingTest {
 
   @Test public void extract_samplesLocalWhenConfigured() {
     map.put("b3", "0");
-    map.put("sampling", "links:sampled=0;triage:tps=5");
+    map.put("sampling", "links:sampled=0;triage");
 
     assertThat(extractor.extract(map).sampledLocal()).isFalse();
 
     map.put("b3", "0");
-    map.put("sampling", "links:sampled=0;triage:sampled=1");
+    map.put("sampling", "links:sampled=0;triage");
 
     assertThat(extractor.extract(map).sampledLocal()).isFalse();
 
     map.put("b3", "0");
-    map.put("sampling", "links:sampled=1;triage:tps=5");
+    map.put("sampling", "links;triage");
 
     assertThat(extractor.extract(map).sampledLocal()).isTrue();
   }
@@ -283,16 +283,16 @@ public class SecondaryConditionalSamplingTest {
   @Test public void dynamicConfiguration() {
     // base case: links is configured, triage is not. triage is in the headers, though!
     map.put("b3", "0");
-    map.put("sampling", "links:sampled=1;triage:tps=5");
+    map.put("sampling", "links;triage");
 
     assertThat(extractor.extract(map).sampledLocal()).isTrue();
 
     // dynamic configuration removes link processing
-    secondaryConditionalSampling.removeSystem("links");
+    secondarySampling.removeSystem("links");
     assertThat(extractor.extract(map).sampledLocal()).isFalse();
 
     // dynamic configuration adds triage processing
-    secondaryConditionalSampling.putSystem("triage", triageHandler);
+    secondarySampling.putSystem("triage", triageHandler);
     assertThat(extractor.extract(map).sampledLocal()).isTrue();
 
     tracing.tracer().nextSpan(extractor.extract(map)).start().finish();
@@ -304,7 +304,7 @@ public class SecondaryConditionalSamplingTest {
 
   @Test public void extract_convertsConfiguredTpsToDecision() {
     map.put("b3", "0");
-    map.put("sampling", "edge:tps=1,ttl=3;links:sampled=0;triage:tps=5");
+    map.put("sampling", "edge:tps=1,ttl=3;links:sampled=0;triage");
 
     TraceContextOrSamplingFlags extracted = extractor.extract(map);
     Extra extra = (Extra) extracted.extra().get(0);
@@ -316,7 +316,7 @@ public class SecondaryConditionalSamplingTest {
 
   @Test public void extract_decrementsTtlWhenConfigured() {
     map.put("b3", "0");
-    map.put("sampling", "edge:sampled=1,ttl=3;links:sampled=0,ttl=1;triage:tps=5");
+    map.put("sampling", "edge,ttl=3;links:sampled=0,ttl=1;triage");
 
     TraceContextOrSamplingFlags extracted = extractor.extract(map);
     Extra extra = (Extra) extracted.extra().get(0);
@@ -339,7 +339,7 @@ public class SecondaryConditionalSamplingTest {
       .build(), map);
 
     assertThat(map)
-      .containsEntry("sampling", "edge:tps=1,ttl=3;links:sampled=0;triage:tps=5");
+      .containsEntry("sampling", "edge:tps=1,ttl=3;links:sampled=0;triage");
   }
 
   static <K, V> Map<K, V> twoEntryMap(K key1, V value1, K key2, V value2) {

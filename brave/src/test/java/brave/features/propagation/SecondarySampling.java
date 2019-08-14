@@ -16,12 +16,12 @@ package brave.features.propagation;
 import brave.Tracing;
 import brave.handler.MutableSpan;
 import brave.propagation.B3SinglePropagation;
+import brave.propagation.ExtraFieldPropagation;
 import brave.propagation.Propagation.Getter;
 import brave.propagation.Propagation.KeyFactory;
 import brave.propagation.Propagation.Setter;
 import brave.propagation.TraceContext;
 import brave.propagation.TraceContextOrSamplingFlags;
-import brave.sampler.RateLimitingSampler;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,24 +29,24 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-public final class SecondaryConditionalSampling {
+public final class SecondarySampling extends ExtraFieldPropagation.Plugin {
 
-  public static SecondaryConditionalSampling create() {
-    return new SecondaryConditionalSampling();
+  public static SecondarySampling create() {
+    return new SecondarySampling();
   }
 
   Propagation.Factory propagationFactory = B3SinglePropagation.FACTORY;
   final Map<String, brave.handler.FinishedSpanHandler> systemToHandlers = new ConcurrentHashMap<>();
 
-  SecondaryConditionalSampling() {
+  SecondarySampling() {
   }
 
-  public SecondaryConditionalSampling putSystem(String system, brave.handler.FinishedSpanHandler handler) {
+  public SecondarySampling putSystem(String system, brave.handler.FinishedSpanHandler handler) {
     systemToHandlers.put(system, handler);
     return this;
   }
 
-  public SecondaryConditionalSampling removeSystem(String system) {
+  public SecondarySampling removeSystem(String system) {
     systemToHandlers.remove(system);
     return this;
   }
@@ -207,15 +207,6 @@ public final class SecondaryConditionalSampling {
   }
 
   static boolean updateStateAndSample(Map<String, String> state) {
-    // if there's a tps, convert it to a sampling decision
-    String tps = state.remove("tps");
-    if (tps != null) {
-      // in real life the sampler would be cached
-      boolean decision = RateLimitingSampler.create(Integer.parseInt(tps)).isSampled(1L);
-      state.put("sampled", decision ? "1" : "0");
-      return decision;
-    }
-
     if (state.containsKey("ttl")) { // decrement ttl if there is one
       String ttl = state.remove("ttl");
       if (ttl.equals("1")) {
