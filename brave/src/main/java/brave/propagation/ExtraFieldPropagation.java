@@ -166,7 +166,7 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     /**
      * This allows you to customize or prevent extra fields from going to the next host.
      *
-     * <p>The resulting field updater will called for each {@link #fieldNames() field name} in the
+     * <p>The resulting field updater will be called for each {@link #fieldNames() field name} in the
      * order they were configured.
      */
     protected FieldUpdater injectFieldUpdater(TraceContext context) {
