@@ -183,18 +183,6 @@ public class SecondarySamplingTest {
   List<zipkin2.Span> zipkin = new ArrayList<>(), edge = new ArrayList<>(), triage =
     new ArrayList<>();
 
-
-  // This ensures the backend knows if zipkin was sampled or not.
-  FinishedSpanHandler addZipkinIfSampled = new FinishedSpanHandler() {
-    @Override public boolean handle(TraceContext context, MutableSpan span) {
-      if (!Boolean.TRUE.equals(context.sampled())) return true;
-      // otherwise add zipkin to the systems list.
-      String systems = span.tag("systems");
-      span.tag("systems", systems != null ? "zipkin," + systems : "zipkin");
-      return true;
-    }
-  };
-
   Reporter<zipkin2.Span> traceForwarder = span -> {
     String systems = span.tags().get("systems");
     if (systems.contains("zipkin")) zipkin.add(span);
