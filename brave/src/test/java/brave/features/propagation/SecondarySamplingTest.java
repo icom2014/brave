@@ -21,9 +21,12 @@ import brave.features.propagation.SecondarySampling.Extra;
 import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
 import brave.propagation.ExtraFieldPropagation;
+import brave.propagation.ExtraFieldPropagation.FieldUpdater;
+import brave.propagation.ExtraFieldPropagation.Plugin;
 import brave.propagation.TraceContext;
 import brave.propagation.TraceContextOrSamplingFlags;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -107,8 +110,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Secondary fields and state management about them is the responsibility of {@link
  * ExtraFieldPropagation}. Here, you can add an extra field that corresponds to a header sent out of
- * process. You can also add a {@link ExtraFieldPropagation.Plugin} to ensure a relevant tag gets to
- * the trace forwarder.
+ * process. You can also add a {@link Plugin} to ensure a relevant tag gets to the trace forwarder.
  *
  * TODO: continue to update
  *
@@ -170,7 +172,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>Summary</h2>
  * It is relatively easy to report more data based on a secondary decision made based on an extra
- * field. All you need to do is implement and configure {@link ExtraFieldPropagation.Plugin} to
+ * field. All you need to do is implement and configure {@link Plugin} to
  * {@link TraceContext#sampledLocal() sample local} based on the field value, and set the tracing
  * instance to {@link Tracing.Builder#alwaysReportSpans() always report spans}. If the spans already
  * contain data the backend needs to route to appropriate data stores, you are done. If it needs a
@@ -180,6 +182,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class SecondarySamplingTest {
   List<zipkin2.Span> zipkin = new ArrayList<>(), edge = new ArrayList<>(), triage =
     new ArrayList<>();
+
+
+  // This ensures the backend knows if zipkin was sampled or not.
+  FinishedSpanHandler addZipkinIfSampled = new FinishedSpanHandler() {
+    @Override public boolean handle(TraceContext context, MutableSpan span) {
+      if (!Boolean.TRUE.equals(context.sampled())) return true;
+      // otherwise add zipkin to the systems list.
+      String systems = span.tag("systems");
+      span.tag("systems", systems != null ? "zipkin," + systems : "zipkin");
+      return true;
+    }
+  };
+
   Reporter<zipkin2.Span> traceForwarder = span -> {
     String systems = span.tags().get("systems");
     if (systems.contains("zipkin")) zipkin.add(span);
