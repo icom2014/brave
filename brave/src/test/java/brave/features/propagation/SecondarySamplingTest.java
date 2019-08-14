@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>Zipkin vs Edge vs Triage</h2>
  * In this example, there are three tracing systems: zipkin, edge and triage. The following points
- * describe elaborate both what they need and what they don't need.
+ * describe elaborately both what they need and what they don't need.
  *
  * <h3>Zipkin</h3>
  * Zipkin is always on for the entire network, and if tracing occurs, it wants the entire trace from
