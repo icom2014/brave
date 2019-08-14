@@ -15,6 +15,8 @@ package brave.internal;
 
 import brave.ScopedSpan;
 import brave.Span;
+import brave.handler.FinishedSpanHandler;
+import brave.propagation.ExtraFieldPropagation;
 import brave.propagation.SamplingFlags;
 import brave.propagation.TraceContext;
 import java.util.List;
@@ -50,6 +52,8 @@ public abstract class InternalPropagation {
     }
     return flags;
   }
+
+  public abstract FinishedSpanHandler finishedSpanHandler(ExtraFieldPropagation.Plugin plugin);
 
   /**
    * @param localRootId must be non-zero prior to instantiating {@link Span} or {@link ScopedSpan}

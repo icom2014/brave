@@ -14,6 +14,7 @@
 package brave;
 
 import brave.handler.FinishedSpanHandler;
+import brave.internal.InternalPropagation;
 import brave.internal.IpLiteral;
 import brave.internal.Nullable;
 import brave.internal.Platform;
@@ -23,6 +24,7 @@ import brave.internal.recorder.PendingSpans;
 import brave.propagation.B3Propagation;
 import brave.propagation.CurrentTraceContext;
 import brave.propagation.ExtraFieldPropagation;
+import brave.propagation.ExtraFieldPropagation.Plugin;
 import brave.propagation.Propagation;
 import brave.propagation.TraceContext;
 import brave.sampler.Sampler;
@@ -340,7 +342,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #alwaysReportSpans()
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPropagation.Plugin)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(Plugin)
      */
     public Builder addFinishedSpanHandler(FinishedSpanHandler finishedSpanHandler) {
       if (finishedSpanHandler == null) {
@@ -370,7 +372,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #addFinishedSpanHandler(FinishedSpanHandler)
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPropagation.Plugin)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(Plugin)
      */
     public Builder alwaysReportSpans() {
       this.alwaysReportSpans = true;
@@ -423,6 +425,14 @@ public abstract class Tracing implements Closeable {
 
       ArrayList<FinishedSpanHandler> finishedSpanHandlers =
         new ArrayList<>(builder.finishedSpanHandlers); // defensive copy against mutation of builder
+
+      // Register any extra field plugins as finished span handlers.
+      if (propagationFactory instanceof ExtraFieldPropagation.Factory) {
+        for (Plugin plugin : ((ExtraFieldPropagation.Factory) propagationFactory).plugins()) {
+          FinishedSpanHandler next = InternalPropagation.instance.finishedSpanHandler(plugin);
+          if (next != FinishedSpanHandler.NOOP) finishedSpanHandlers.add(next);
+        }
+      }
 
       // If a Zipkin reporter is present, it is invoked after the user-supplied finished span handlers.
       FinishedSpanHandler zipkinHandler = FinishedSpanHandler.NOOP;

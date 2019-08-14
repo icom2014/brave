@@ -14,6 +14,7 @@
 package brave.propagation;
 
 import brave.Tracing;
+import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
 import brave.internal.Nullable;
 import brave.internal.PredefinedPropagationFields;
@@ -132,6 +133,8 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
    * Methods here are called once per extract or inject, which allows the returned customizer to
    * handle multiple fields as needed.
    */
+  // extends FinishedSpanHandler by default as commonly, you have to coordinate with data out-bound,
+  // such as adding a tag per extra field.
   public static abstract class Plugin {
     // declaring field names here means plugins do not need to collaborate with the builder
     protected final Set<String> fieldNames;
@@ -149,9 +152,19 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
       return FieldUpdater.NOOP;
     }
 
+    // Intentionally protected to prevent accidental registration with Tracing.Builder
+    protected FinishedSpanHandler finishedSpanHandler() {
+      return FinishedSpanHandler.NOOP;
+    }
+
     @Override public String toString() {
       return getClass().getSimpleName() + "{" + fieldNames + "}";
     }
+  }
+
+  /** Sneaky accessibility trick. This allows us to access the finished span handler internally. */
+  static FinishedSpanHandler finishedSpanHandler(Plugin plugin) {
+    return plugin.finishedSpanHandler();
   }
 
   static final class RedactOnInject extends Plugin implements FieldUpdater {
@@ -370,6 +383,11 @@ public final class ExtraFieldPropagation<K> implements Propagation<K> {
     final int[] keyToField;
     final ExtraFactory extraFactory;
     final Plugin[] plugins;
+
+    /** Used to implicitly register as {@link Tracing.Builder#addFinishedSpanHandler(FinishedSpanHandler)}. */
+    public List<Plugin> plugins() {
+      return Collections.unmodifiableList(Arrays.asList(plugins));
+    }
 
     Factory(Propagation.Factory delegate, String[] fieldNames, String[] keyNames) {
       this(delegate, fieldNames, keyNames, keyToField(keyNames), NO_CONTEXT_CUSTOMIZERS);
