@@ -2,6 +2,7 @@ package brave.features.propagation;
 
 import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
+import brave.propagation.ExtraFieldPlugin;
 import brave.propagation.TraceContext;
 import brave.propagation.TraceContextOrSamplingFlags;
 import java.util.Arrays;
@@ -9,10 +10,9 @@ import java.util.List;
 import java.util.Locale;
 
 import static brave.propagation.ExtraFieldPropagation.FieldUpdater;
-import static brave.propagation.ExtraFieldPropagation.Plugin;
 import static brave.propagation.ExtraFieldPropagation.get;
 
-class SecondarySamplingPlugin extends Plugin {
+class SecondarySamplingPlugin extends ExtraFieldPlugin {
   final String system;
   final String samplingField;
 

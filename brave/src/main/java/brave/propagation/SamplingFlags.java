@@ -16,7 +16,6 @@ package brave.propagation;
 import brave.handler.FinishedSpanHandler;
 import brave.internal.InternalPropagation;
 import brave.internal.Nullable;
-import brave.propagation.ExtraFieldPropagation.Plugin;
 import java.util.List;
 
 import static brave.internal.InternalPropagation.FLAG_DEBUG;
@@ -37,8 +36,9 @@ public class SamplingFlags {
         return flags.flags;
       }
 
-      @Override public FinishedSpanHandler finishedSpanHandler(Plugin plugin) {
-        return ExtraFieldPropagation.finishedSpanHandler(plugin);
+      @Override
+      public FinishedSpanHandler finishedSpanHandler(ExtraFieldPropagation.Factory factory) {
+        return ExtraFieldPropagation.finishedSpanHandler(factory);
       }
 
       @Override

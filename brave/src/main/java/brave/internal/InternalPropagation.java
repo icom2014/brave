@@ -53,7 +53,8 @@ public abstract class InternalPropagation {
     return flags;
   }
 
-  public abstract FinishedSpanHandler finishedSpanHandler(ExtraFieldPropagation.Plugin plugin);
+  /** Returns a potentially {@link FinishedSpanHandler#NOOP noop} finished span handler */
+  public abstract FinishedSpanHandler finishedSpanHandler(ExtraFieldPropagation.Factory factory);
 
   /**
    * @param localRootId must be non-zero prior to instantiating {@link Span} or {@link ScopedSpan}

@@ -23,8 +23,8 @@ import brave.internal.handler.ZipkinFinishedSpanHandler;
 import brave.internal.recorder.PendingSpans;
 import brave.propagation.B3Propagation;
 import brave.propagation.CurrentTraceContext;
+import brave.propagation.ExtraFieldPlugin;
 import brave.propagation.ExtraFieldPropagation;
-import brave.propagation.ExtraFieldPropagation.Plugin;
 import brave.propagation.Propagation;
 import brave.propagation.TraceContext;
 import brave.sampler.Sampler;
@@ -342,7 +342,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #alwaysReportSpans()
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(Plugin)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPlugin)
      */
     public Builder addFinishedSpanHandler(FinishedSpanHandler finishedSpanHandler) {
       if (finishedSpanHandler == null) {
@@ -372,7 +372,7 @@ public abstract class Tracing implements Closeable {
      *
      * @see #addFinishedSpanHandler(FinishedSpanHandler)
      * @see TraceContext#sampledLocal()
-     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(Plugin)
+     * @see ExtraFieldPropagation.FactoryBuilder#addPlugin(ExtraFieldPlugin)
      */
     public Builder alwaysReportSpans() {
       this.alwaysReportSpans = true;
@@ -428,10 +428,9 @@ public abstract class Tracing implements Closeable {
 
       // Register any extra field plugins as finished span handlers.
       if (propagationFactory instanceof ExtraFieldPropagation.Factory) {
-        for (Plugin plugin : ((ExtraFieldPropagation.Factory) propagationFactory).plugins()) {
-          FinishedSpanHandler next = InternalPropagation.instance.finishedSpanHandler(plugin);
-          if (next != FinishedSpanHandler.NOOP) finishedSpanHandlers.add(next);
-        }
+        ExtraFieldPropagation.Factory extra = ((ExtraFieldPropagation.Factory) propagationFactory);
+        FinishedSpanHandler maybeNoop = InternalPropagation.instance.finishedSpanHandler(extra);
+        if (maybeNoop != FinishedSpanHandler.NOOP) finishedSpanHandlers.add(maybeNoop);
       }
 
       // If a Zipkin reporter is present, it is invoked after the user-supplied finished span handlers.
@@ -442,17 +441,7 @@ public abstract class Tracing implements Closeable {
         finishedSpanHandlers.add(zipkinHandler);
       }
 
-      FinishedSpanHandler finishedSpanHandler;
-      switch (finishedSpanHandlers.size()) {
-        case 0:
-          finishedSpanHandler = FinishedSpanHandler.NOOP;
-          break;
-        case 1:
-          finishedSpanHandler = finishedSpanHandlers.iterator().next();
-          break;
-        default:
-          finishedSpanHandler = FinishedSpanHandlers.compose(finishedSpanHandlers);
-      }
+      FinishedSpanHandler finishedSpanHandler = FinishedSpanHandlers.compose(finishedSpanHandlers);
 
       this.tracer = new Tracer(
         builder.clock,

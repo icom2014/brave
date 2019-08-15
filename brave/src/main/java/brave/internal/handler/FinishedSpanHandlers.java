@@ -17,19 +17,26 @@ import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
 import brave.internal.Platform;
 import brave.propagation.TraceContext;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FinishedSpanHandlers {
   public static FinishedSpanHandler compose(Collection<FinishedSpanHandler> finishedSpanHandlers) {
-    if (finishedSpanHandlers.size() < 2) throw new IllegalArgumentException("don't compose < 2");
+    if (finishedSpanHandlers.isEmpty()) return FinishedSpanHandler.NOOP;
+    if (finishedSpanHandlers.size() == 1) return finishedSpanHandlers.iterator().next();
     int i = 0;
     boolean alwaysSampleLocal = false;
-    FinishedSpanHandler[] copy = new FinishedSpanHandler[finishedSpanHandlers.size()];
-    for (FinishedSpanHandler finishedSpanHandler : finishedSpanHandlers) {
-      if (finishedSpanHandler.alwaysSampleLocal()) alwaysSampleLocal = true;
-      copy[i++] = finishedSpanHandler;
+    List<FinishedSpanHandler> copy = new ArrayList<>();
+    for (FinishedSpanHandler handler : finishedSpanHandlers) {
+      if (handler.alwaysSampleLocal()) alwaysSampleLocal = true;
+      if (handler instanceof CompositeFinishedSpanHandler) {
+        copy.addAll(Arrays.asList(((CompositeFinishedSpanHandler) handler).handlers));
+      } else {
+        copy.add(handler);
+      }
     }
     return new CompositeFinishedSpanHandler(copy, alwaysSampleLocal);
   }
@@ -76,8 +83,8 @@ public final class FinishedSpanHandlers {
     final FinishedSpanHandler[] handlers; // Array ensures no iterators are created at runtime
     final boolean alwaysSampleLocal;
 
-    CompositeFinishedSpanHandler(FinishedSpanHandler[] handlers, boolean alwaysSampleLocal) {
-      this.handlers = handlers;
+    CompositeFinishedSpanHandler(List<FinishedSpanHandler> handlers, boolean alwaysSampleLocal) {
+      this.handlers = handlers.toArray(new FinishedSpanHandler[0]);
       this.alwaysSampleLocal = alwaysSampleLocal;
     }
 

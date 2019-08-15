@@ -20,13 +20,11 @@ import brave.Tracing;
 import brave.features.propagation.SecondarySampling.Extra;
 import brave.handler.FinishedSpanHandler;
 import brave.handler.MutableSpan;
+import brave.propagation.ExtraFieldPlugin;
 import brave.propagation.ExtraFieldPropagation;
-import brave.propagation.ExtraFieldPropagation.FieldUpdater;
-import brave.propagation.ExtraFieldPropagation.Plugin;
 import brave.propagation.TraceContext;
 import brave.propagation.TraceContextOrSamplingFlags;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -110,7 +108,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Secondary fields and state management about them is the responsibility of {@link
  * ExtraFieldPropagation}. Here, you can add an extra field that corresponds to a header sent out of
- * process. You can also add a {@link Plugin} to ensure a relevant tag gets to the trace forwarder.
+ * process. You can also add an {@link ExtraFieldPlugin} to ensure a relevant tag gets to the trace
+ * forwarder.
  *
  * TODO: continue to update
  *
@@ -171,13 +170,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * }</pre>
  *
  * <h2>Summary</h2>
- * It is relatively easy to report more data based on a secondary decision made based on an extra
- * field. All you need to do is implement and configure {@link Plugin} to
- * {@link TraceContext#sampledLocal() sample local} based on the field value, and set the tracing
- * instance to {@link Tracing.Builder#alwaysReportSpans() always report spans}. If the spans already
- * contain data the backend needs to route to appropriate data stores, you are done. If it needs a
- * hint, you can add a {@link FinishedSpanHandler} to add a tag which ensures the backend consistently
- * and statelessly honors the sampling intent.
+ * To report more data based on a secondary decision made based on an extra field is a couple steps:
+ * Implement and configure {@link ExtraFieldPlugin} to {@link TraceContext#sampledLocal() sample local}
+ * based on the field value, and set the tracing instance to {@link Tracing.Builder#alwaysReportSpans()
+ * always report spans}. If the spans already contain data the backend needs to route to appropriate
+ * data stores, you are done. If it needs a hint, implement the plugin's {@link FinishedSpanHandler}
+ * to add a tag which ensures the backend consistently and statelessly honors the sampling intent.
  */
 public class SecondarySamplingTest {
   List<zipkin2.Span> zipkin = new ArrayList<>(), edge = new ArrayList<>(), triage =
